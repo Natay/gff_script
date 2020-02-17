@@ -14,6 +14,14 @@ def is_augustus(data):
     return data['t_best'] != "stringtie" and data['g_best'] != "augustus"
 
 
+def dict_to_str(data, delim=";"):
+
+    lst = [f"{k}={v}" for k, v in data.items()]
+    stri = f"{delim}".join(lst)
+
+    return stri
+
+
 def parse_attrs(attr_str, attr_name):
     # Find start and ending index of the attribute we want
     if not attr_str:
@@ -133,9 +141,68 @@ def parse_data(gmeta_data, trans_meta, gstore):
     return data
 
 
-def modify_gene_attrs(gid, attrs_dict):
+def get_evidence(source):
+    if source in ["stringtie", "locus", "augustus"]:
+        return source
+    evidence = "species"
+    return evidence
 
-    return
+
+def get_evidence_vals(evidence, attrs):
+    """
+    returns pident, qcovs
+    """
+    pident, qcovs = 0, 0
+    if evidence == "species":
+        pident = parse_attrs(attrs, "percentage_identity")
+        qcovs = parse_attrs(attrs, "query_coverage")
+    return pident, qcovs
+
+
+def modify_gene_attrs(gid, attrs_dict):
+    is_augus = attrs_dict['is_augus']
+    name = attrs_dict['gname']
+    source = attrs_dict['source']
+    qcovs = attrs_dict['qcovs']
+    pident = attrs_dict['pident']
+    modified = dict(ID=gid, gene_id=gid, gene_name=gid, Name=gid,
+                    best_match=source)
+    if not is_augus:
+        update_dict = dict(gene_name=name, Name=name, best_match=source,
+                           query_coverage=qcovs, percentage_identity=pident)
+        modified.update(update_dict)
+
+    modified_str = dict_to_str(data=modified)
+
+    return modified_str
+
+
+def modify_transcript_attr(uid, tid, tidx, gid, gname, source, qcovs, pident, evidence, term, seen_tuids):
+    parent = gid
+    trans_no = tid.split(".")[1]
+    uid_mod = gid + ".t" + str(tidx)
+
+    while uid_mod in seen_tuids:
+        tidx += 1
+        uid_mod = gid + ".t" + str(tidx)
+
+    trans_id = gid + ".t" + str(tidx)
+    attrs_dict = dict()
+    if evidence == "stringtie":
+        trans_id = gid + ".t" + str(tidx) if term != "gene" else uid_mod
+        new_attr = f'ID={uid_mod};Parent={parent};original_id={uid};transcript_id={trans_id};gene_name={parent};Name={trans_id};best_match={evidence}'
+    elif evidence == "locus":
+        trans_id = gname + ".t" + str(tidx) if term != "gene"  else ".".join([gname, trans_no])
+        new_attr = f'ID={uid_mod};Parent={parent};original_id={uid};transcript_id={trans_id};gene_name={gname};Name={trans_id};best_match={evidence}'
+
+    else:
+        trans_id = gname + ".t" + str(tidx) if term != "gene"  else ".".join([gname, trans_no])
+        if term == "stringtie_transcript"  or term == "parent_change":
+            new_attr = f'ID={uid_mod};Parent={parent};original_id={uid};transcript_id={trans_id};gene_name={gname};Name={trans_id};best_match={source};query_coverage={qcovs};percentage_identity={pident}'
+        else:
+            new_attr = f'ID={uid};Parent={parent};original_id={uid};transcript_id={trans_id};gene_name={gname};Name={trans_id};best_match={source};query_coverage={qcovs};percentage_identity={pident}'
+    return new_attr
+
 
 def get_attrs_dict(full_attr):
     uid = parse_attrs(full_attr, "ID")
@@ -144,44 +211,37 @@ def get_attrs_dict(full_attr):
     gname = parse_attrs(full_attr, "gene_name")
     source = parse_attrs(full_attr, "best_match")
     evidence = get_evidence(source)
-    pident, qcovs = get_evidence_vals(evidence, curr_attr)
+    pident, qcovs = get_evidence_vals(evidence, full_attr)
+    # Is augustus
+    is_augus = evidence == "stringtie" or 'evidence' == "augustus"
 
-    data = dict(uid=uid, gid=gid, gname=gname, best_match=best_match, source=source,
+    data = dict(uid=uid, gid=gid, gname=gname, best_match=source, source=source,is_augus=is_augus,
                 evidence=evidence, pident=pident, qcovs=qcovs)
     return data
 
 
-def assign(a, b):
-    a = b
-    return a
-
-def reassigner(key_list, ):
-    return
-
-
-def annotate_transcript(parent_gene, term, seen_ids=set(), collect=dict()):
-    tuid, tgid, tgname, tbest_match, tsource, tevidence, tpident, tqcovs = get_attributes(item[8])
+def annotate_transcript(parent_gene, term, gene_attrs_dict, trans_attr, seen_ids=set(), collect=dict()):
+    trans_attrs = get_attrs_dict(trans_attr)
+    tuid = trans_attrs["uid"]
+    # Add transcript to collect dict.
     collect[tuid] = parent_gene
-    uid, gid, gname, best_match, source, evidence, pident, qcovs = None
-    #var_dict()
+
+    uid, gid = gene_attrs_dict["uid"], gene_attrs_dict["gid"]
+    gname, best_match = gene_attrs_dict["gname"],gene_attrs_dict["best_match"]
+    source, evidence = gene_attrs_dict['source'], gene_attrs_dict['evidence']
+    pident, qcovs = gene_attrs_dict['pident'], gene_attrs_dict['qcovs']
+
     if term in ["transcript", "gene"]:
         uid = tuid
-        best_match = tbest_match
-        source = tsource
-        evidence = tevidence
-        pident = tpident
-        qcovs = tqcovs
-        tid = uid
+        best_match = trans_attrs["best_match"]
+        source = trans_attrs["source"]
+        evidence = trans_attrs["evidence"]
+        pident = trans_attrs["pident"]
+        qcovs = trans_attrs["qcovs"]
+        tid = trans_attrs["uid"]
 
     if term == "gene":
-        uid = tuid
-        gid = tgid
-        source = tsource
-        best_match = tbest_match
-        pident = tpident
-        qcovs = tqcovs
-        evidence = tevidence
-        tid = uid
+        gid = trans_attrs["gid"]
 
     if term == "parent_change":
         gid = parent_gene
@@ -194,8 +254,9 @@ def annotate_transcript(parent_gene, term, seen_ids=set(), collect=dict()):
 
     modified = modify_transcript_attr(uid, tid, count, gid, gname, source, qcovs, pident, evidence,
                                       ann_term, seen_ids)
-    d[tuid] = extract_attr(tran_attr, "ID=")
-    seen_ids.add(d[tuid])
+
+    collect[tuid] = extract_attr(tran_attr, "ID")
+    seen_ids.add(collect[tuid])
 
     return modified
 
@@ -208,6 +269,8 @@ def annotate_existing(attr, count, trans_vals, term, parent_gene, seen_ids=set()
 
     for item in vals1:
         chrom, start, end, strand, current_attr, feat = parse_row(item)
+        trans_attrs = get_attrs_dict(current_attr)
+        tid = trans_attrs['uid']
         ann_gene = feat == "gene"
         ann_transcript = feat == "transcript"
 
@@ -216,12 +279,12 @@ def annotate_existing(attr, count, trans_vals, term, parent_gene, seen_ids=set()
             modified = modify_gene_attrs(gid, attrs_dict)
 
         elif ann_transcript:
-            modified = annotate_transcript(parent_gene=parent_gene, term=term,
-                                           seen_ids=seen_ids, collect=collect)
+            modified = annotate_transcript(parent_gene=parent_gene, term=term, trans_attr=current_attr,
+                                           seen_ids=seen_ids, collect=collect, gene_attrs_dict=attrs_dict)
 
         else:
             pid = collect[tid]
-            modified = modify_attr(item[8], pid, count, attrs_dict['gname'], term)
+            modified = modify_attr(current_attr, pid, count, attrs_dict['gname'], term)
 
         # Modify the attribute column
         item[8] = modified

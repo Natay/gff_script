@@ -224,7 +224,7 @@ def annotate_existing(attr, count, existing_vals, ann_term, parent_gene, seen_id
                 tid = uid
 
             if ann_term == "parent_change":
-                gid =  parent_gene
+                gid = parent_gene
                 tid = uid
 
             if ann_term == "transcript_locus":
@@ -239,7 +239,7 @@ def annotate_existing(attr, count, existing_vals, ann_term, parent_gene, seen_id
             seen_ids.add(d[tuid])
 
         else:
-
+            #TODO: what is the point of d
             pid = d[tid]
             new_attr = modify_attr(item[8], pid, count, gname, ann_term)
             item[8] = new_attr
