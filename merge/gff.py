@@ -7,15 +7,13 @@ TEST_STRINGTIE = "stringtie.gff3"
 
 def parse_row(row):
     # chrom, start, end, strand, attr, feat
-    return row[0], row[3], row[4], row[6], row[8], row[2]
-
-
-def is_augustus(data):
-    return data['t_best'] != "stringtie" and data['g_best'] != "augustus"
+    return row[0], int(row[3]), int(row[4]), row[6], row[8], row[2]
 
 
 def dict_to_str(data, delim=";"):
-
+    """
+    Convert dictionary to string or separated by delim.
+    """
     lst = [f"{k}={v}" for k, v in data.items()]
     stri = f"{delim}".join(lst)
 
@@ -177,7 +175,21 @@ def modify_gene_attrs(gid, attrs_dict):
     return modified_str
 
 
-def modify_transcript_attr(uid, tid, tidx, gid, gname, source, qcovs, pident, evidence, term, seen_tuids):
+def modify_stringtie_gene_attr(gid, gene_id, gname, source, qcovs, pident,evidence):
+
+    new_attr = dict(ID=gid, gene_id=gid, gene_name=gene_id,
+                    Name=gene_id, best_match="stringtie")
+
+    if not (evidence == "stringtie" or evidence == "augustus"):
+        new_attr.update(dict(gene_name=gname, Name=gname, best_match=source,
+                             query_coverage=qcovs, percentage_identity=pident))
+
+    attr_str = dict_to_str(data=new_attr)
+    return attr_str
+
+
+def modify_transcript_attr(data):
+    # TODO: working on this
     parent = gid
     trans_no = tid.split(".")[1]
     uid_mod = gid + ".t" + str(tidx)
@@ -187,20 +199,52 @@ def modify_transcript_attr(uid, tid, tidx, gid, gname, source, qcovs, pident, ev
         uid_mod = gid + ".t" + str(tidx)
 
     trans_id = gid + ".t" + str(tidx)
-    attrs_dict = dict()
+    attrs_dict = dict(ID=uid_mod, Parent=parent, original_id=uid,
+                      transcript_id=trans_id,
+                      gene_name=parent, Name=trans_id, best_match= evidence)
+
     if evidence == "stringtie":
         trans_id = gid + ".t" + str(tidx) if term != "gene" else uid_mod
-        new_attr = f'ID={uid_mod};Parent={parent};original_id={uid};transcript_id={trans_id};gene_name={parent};Name={trans_id};best_match={evidence}'
+        attrs_dict.update(dict(transcript_id=trans_id, Name=trans_id))
+
     elif evidence == "locus":
         trans_id = gname + ".t" + str(tidx) if term != "gene"  else ".".join([gname, trans_no])
-        new_attr = f'ID={uid_mod};Parent={parent};original_id={uid};transcript_id={trans_id};gene_name={gname};Name={trans_id};best_match={evidence}'
+        # gene_name={gname};Name={trans_id};best_match={evidence}
+        attrs_dict.update(dict(transcript_id=trans_id, gene_name=gname, Name=trans_id, best_match=evidence))
 
     else:
         trans_id = gname + ".t" + str(tidx) if term != "gene"  else ".".join([gname, trans_no])
-        if term == "stringtie_transcript"  or term == "parent_change":
-            new_attr = f'ID={uid_mod};Parent={parent};original_id={uid};transcript_id={trans_id};gene_name={gname};Name={trans_id};best_match={source};query_coverage={qcovs};percentage_identity={pident}'
+
+        if term == "stringtie_transcript" or term == "parent_change":
+            attrs_dict.update(dict(transcript_id=trans_id, gene_name=gname,
+                                   Name=trans_id,
+                                   best_match=source,
+                                   query_coverage=qcovs, percentage_identity=pident))
         else:
-            new_attr = f'ID={uid};Parent={parent};original_id={uid};transcript_id={trans_id};gene_name={gname};Name={trans_id};best_match={source};query_coverage={qcovs};percentage_identity={pident}'
+            attrs_dict.update(dict(ID=uid, transcript_id=trans_id, gene_name=gname,
+                                   Name=trans_id,
+                                   best_match=source,
+                                   query_coverage=qcovs, percentage_identity=pident))
+    new_attr = dict_to_str(data=attrs_dict)
+    return new_attr
+
+
+def modify_attr(attr, tid, tidx, gname, term):
+    #TODO: working on this
+    parent = tid
+    trans_no = tid.split(".")[1]
+
+    if gname is None or gname == "":
+        new_attr = f'Parent={parent};transcript_id={parent}'
+    else:
+        trans_id = gname + ".t" + str(tidx) if term != "gene"  else ".".join([gname, trans_no])
+        new_attr = f'Parent={parent};transcript_id={trans_id};gene_name={gname}'
+
+    if attr.startswith("ID"):
+        feat = attr.split(";")[0].split(".")[-1]
+        id_ = "ID=" + ".".join([parent, feat])
+        new_attr = ";".join([id_, new_attr])
+
     return new_attr
 
 
@@ -233,7 +277,6 @@ def annotate_transcript(parent_gene, term, gene_attrs_dict, trans_attr, seen_ids
 
     if term in ["transcript", "gene"]:
         uid = tuid
-        best_match = trans_attrs["best_match"]
         source = trans_attrs["source"]
         evidence = trans_attrs["evidence"]
         pident = trans_attrs["pident"]
@@ -252,16 +295,18 @@ def annotate_transcript(parent_gene, term, gene_attrs_dict, trans_attr, seen_ids
         gid = parent_gene
         tid = tuid
 
-    modified = modify_transcript_attr(uid, tid, count, gid, gname, source, qcovs, pident, evidence,
-                                      ann_term, seen_ids)
-
-    collect[tuid] = extract_attr(tran_attr, "ID")
+    # TODO: ensure that seen_ids are actually changing correctly.
+    data = dict(tid=tid, uid=uid, gid=gid, gname=gname, source=source,
+                qcovs=qcovs, pident=pident, evidence=evidence, term=term, seen_ids=seen_ids)
+    modified = modify_transcript_attr(data)
+    collect[tuid] = parse_attrs(trans_attr, "ID")
+    # TODO: ensure that seen_ids are actually changing correctly.
     seen_ids.add(collect[tuid])
 
     return modified
 
 
-def annotate_existing(attr, count, trans_vals, term, parent_gene, seen_ids=set()):
+def annotate_existing(attr, count, trans_vals, annotate, parent_gene, seen_ids=set()):
 
     vals1 = copy.deepcopy(trans_vals)
     attrs_dict = get_attrs_dict(attr)
@@ -279,12 +324,13 @@ def annotate_existing(attr, count, trans_vals, term, parent_gene, seen_ids=set()
             modified = modify_gene_attrs(gid, attrs_dict)
 
         elif ann_transcript:
-            modified = annotate_transcript(parent_gene=parent_gene, term=term, trans_attr=current_attr,
-                                           seen_ids=seen_ids, collect=collect, gene_attrs_dict=attrs_dict)
-
+            modified = annotate_transcript(parent_gene=parent_gene, term=annotate,
+                                           trans_attr=current_attr,
+                                           seen_ids=seen_ids,
+                                           collect=collect, gene_attrs_dict=attrs_dict)
         else:
             pid = collect[tid]
-            modified = modify_attr(current_attr, pid, count, attrs_dict['gname'], term)
+            modified = modify_attr(current_attr, pid, count, attrs_dict['gname'], annotate)
 
         # Modify the attribute column
         item[8] = modified
@@ -292,35 +338,153 @@ def annotate_existing(attr, count, trans_vals, term, parent_gene, seen_ids=set()
     return vals1
 
 
-def handle_gene_overlap(data, count, prev_gene="", seen=set()):
+def add_to_merge_store(merged_store, gene_vals, gene_key, trans_vals, seen=set()):
+
+    if gene_key not in seen:
+        merged_store.extend(gene_vals)
+        seen.add(gene_key)
+    merged_store.extend(trans_vals)
+
+
+def find_gene_cords(tmeta, merged):
+    """
+    Find gene coordinates given a list of merged transcripts.
+    """
+    gstart, gend = tmeta['start'], tmeta['end']
+
+    for item in merged:
+        chrom, start, end, strand, tid = item
+        start, end = int(start), int(end)
+        # Construct new gene meta data with new values.
+        local_gmeta = dict(chrom=chrom, start=start, end=end, strand=strand)
+
+        if is_overlap(gmeta=local_gmeta, tmeta=tmeta):
+            # Redefine gene start and end coordinates.
+            gstart = tmeta['start'] if tmeta['start'] < start else start
+            gend = tmeta['end'] if tmeta['end'] > end else end
+
+    return gstart, gend
+
+
+def handle_no_overlap(tmeta, tkey, tvals, merged_trans_list=[], gene_count=0, merged_gene=dict()):
+
+    gchrom, gstart, gend, gstrand = tmeta['chrom'], tmeta['start'], tmeta['end'], tmeta['strand']
+    tattrs = tmeta['attr']
+
+    if merged_trans_list:
+        gstart, gend = find_gene_cords(tmeta=tmeta,merged=merged_trans_list)
+
+    best_match = parse_attrs(tattrs, "best_match")
+    source = best_match
+    tid = parse_attrs(tattrs, "ID")
+
+    gid = ".".join(tid.split(".")[:-1])
+    gname = parse_attrs(tattrs, "gene_name")
+
+    evidence = get_evidence(best_match)
+    if evidence == "augustus" or evidence == "stringtie":
+        gname = gid
+    pident, qcovs = get_evidence_vals(evidence, tattrs)
+    #  There are transcripts which stringtie thinks should come from the same gene.
+    # But augustus predicted two genes in that location instead of one which also got annotated.
+    # So, assign uniq ids to these genes.
+    stringtie_gene_id = gid
+    gid = gid + ".gene" + str(gene_count)
+
+    gene_attr = modify_stringtie_gene_attr(gid, stringtie_gene_id, gname, source, qcovs, pident, evidence)
+    gene_row = [gchrom, "StringTie", "gene", gstart, gend, ".", gstrand, ".", gene_attr]
+
+    if gname not in merged_gene:
+        merged_gene[gname].append(gene_row)
+    else:
+        merged_gene[gname][0] = gene_row
+
+    merged_gene.setdefault(gname, []).extend(tvals)
+    merged_trans_list.append((gchrom, gstart, gend, gstrand, tkey))
+
+
+def handle_gene_overlap(data, count, gstore, tvals, trans_attrs, merged_store=[], seen=set()):
+    # TODO: working on this
     # Get the transcript counts for this gene
     # Keeping the annotations from transcript itself, change the  parent to augustus gene
+    gene_key = data['g_key']
+    gene_vals = gstore[gene_key]
+    target = data['gene_meta'].get('attr')
+    parent_gene = parse_attrs(target, "ID")
+
+    not_aug = data['t_best'] != "stringtie" and data['g_best'] != "augustus"
+    is_aug = data['t_best'] == "stringtie" and data['g_best'] == "augustus"
+    cond3 = data['t_best'] != "stringtie" and data['g_best'] == "augustus"
+    cond4 = data['t_best'] == "stringtie" and data['g_best'] != "augustus"
 
     # CASE 3A : transcript is annotated and gene is annotated -
     #  Nothing to do except correct transcript suffix numbers and assigning correct parent id
-    if is_augustus(data=data):
-
+    if not_aug:
         annotate = "transcript"
-        target = data['gene_meta']['attr']
-        parent_gene = parse_attrs(target, "ID")
+        modified_transcript = annotate_existing(attr=target, count=count, trans_vals=tvals,
+                                                annotate=annotate, parent_gene=parent_gene,
+                                                seen_ids=seen)
+        add_to_merge_store(merged_store=merged_store,
+                           gene_vals=gene_vals,
+                           gene_key=gene_key,
+                           trans_vals=modified_transcript,
+                           seen=seen)
+        return True
+    # CASE 3B : transcript is unannotated and gene is unannotated
+    # Nothing to do except correct transcript suffix numbers and assign correct parent id
+    if is_aug:
+        annotate = "transcript_locus"
+        modified_transcript = annotate_existing(attr=target, count=count, trans_vals=tvals,
+                                                annotate=annotate, parent_gene=parent_gene,
+                                                seen_ids=seen)
+        add_to_merge_store(merged_store=merged_store,
+                           gene_vals=gene_vals,
+                           gene_key=gene_key,
+                           trans_vals=modified_transcript,
+                           seen=seen)
+        return True
 
-        modified_transcript = annotate_existing(gene_attr, tcount, transcript_vals, annotate, parent_gene,
-                                                seen_tids)
-        if gene_key not in seen:
-            merged_store.extend(aug_store[gene_key])
-            seen.add(gene_key)
-        merged_store.extend(modified_transcript)
+    # CASE 3C : transcript is annotated gene is unannotated - annotate gene with transcript ann
+    # change transcript uid and parent
+    if cond3:
+        annotate = "gene"
+        gene_attr = gene_vals[0][8]
+        parent_gene = parse_attrs(gene_attr, "ID")
+        modified_gene = annotate_existing(attr=trans_attrs, count=count, trans_vals=gene_vals,
+                                          annotate=annotate, parent_gene=parent_gene,
+                                          seen_ids=seen)
 
-        return
+        modified_transcript = annotate_existing(attr=trans_attrs, count=count, trans_vals=tvals,
+                                                annotate="parent_change", parent_gene=parent_gene,
+                                                seen_ids=seen)
+        add_to_merge_store(merged_store=merged_store,
+                           gene_vals=modified_gene,
+                           gene_key=gene_key,
+                           trans_vals=modified_transcript,
+                           seen=seen)
+        return True
 
+    # CASE 3D : transcript is unannotated and gene is annotated - annotate transcript with gene ann
+    if cond4:
+        annotate = "transcript_locus"
+        gene_attr = gene_vals[0][8]
+        parent_gene = parse_attrs(gene_attr, "ID")
+        modified_transcript = annotate_existing(attr=gene_attr, count=count, trans_vals=tvals,
+                                                annotate=annotate, parent_gene=parent_gene, seen_ids=seen)
 
-    return
+        add_to_merge_store(merged_store=merged_store,
+                           gene_vals=gene_vals,
+                           gene_key=gene_key,
+                           trans_vals=modified_transcript,
+                           seen=seen)
+        return True
+
+    return False
 
 
 def inc_count(current_key, prev_gene, count):
     inc = 1
     # This transcript has been seen before
-    #TODO: this only works if it is immedtialy seen before.
     if current_key == prev_gene:
         inc = count + 1
 
@@ -331,6 +495,8 @@ def create_merged_gff(gene_file, transcript_file):
     gstore, gmeta_data = parse_file(gene_file, "gene")
     tstore, tmeta_data = parse_file(transcript_file, "transcript")
     prev_gene, count = "", 0
+    merged_trans, merged_gene = [], dict()
+    gene_count = 0
 
     for tkey, tvals in tstore.items():
         # Get the transcript meta data and parse
@@ -354,27 +520,83 @@ def create_merged_gff(gene_file, transcript_file):
             count = inc_count(current_key=data['g_key'], prev_gene=prev_gene, count=count)
             tcount += count
             prev_gene = data['g_key']
+            trans_attrs = trans_meta['attrs']
             # Continue once the different types of gene overlaps are handled.
-            if handle_gene_overlap(data=data, count=count, prev_gene=prev_gene):
+            if handle_gene_overlap(data=data, count=tcount, tvals=tvals, gstore=gstore, trans_attrs=trans_attrs,
+                                   merged_store=merged_trans):
                 continue
 
         # CASE 4 : No overlap - add gene row to the largest transcript
         if data['no_overlap']:
-            handle_no_overlap()
-            continue
+            gene_count += 1
+            if handle_no_overlap(merged_trans_list=merged_trans, tkey=tkey, tmeta=tmeta_data,
+                                 tvals=tvals, merged_gene=merged_gene, gene_count=gene_count):
+                continue
+
+    # change the parent attribute of the strigtie-specific transcripts
+    # to the newly assigned gene-id.
+    # TODO: working on this
+    new_gene_store = modify_transcript_parent(new_gene_store)
+    new_gene_store = modify_stringtie_transcript_count(new_gene_store, seen_tids)
+    return merged_store, new_gene_store
 
 
 
-        1 / 0
-        pass
+def process_output(merged_store, new_gene_store):
+    current_keys = list()
+    if merged:
+        merged_keys = get_merged_keys(merged)
+        current_keys.extend(merged_keys)
+    if added:
+        added_keys =get_keys(added.keys())
+        current_keys.extend(added_keys)
+
+    if not current_keys:
+        print ("Nothing added from stringtie file")
+        current_keys = aug_gff_store.keys()
+        # print augustus and exit
+        for k , v in aug_gff_store.items():
+            for item in v:
+                item = list(map(str, item))
+                print("\t".join(item))
+        sys.exit()
+
+    # Get augustus genes that did not have any intersection with stringtie, ie, augustus uniq
+    unchanged = get_unchaged_keys(aug_gff_store, current_keys)
+
+    #print header
+    print("##gff-version 3")
+
+    if unchanged:
+        # print unchanged
+        for key in unchanged:
+            for item in aug_gff_store[key]:
+                item = list(map(str, item))
+                print("\t".join(item))
+
+    if merged:
+        # print merged:
+        for item in merged:
+            item = list(map(str, item))
+            print("\t".join(item))
+
+    if added:
+        # print additional from stringtie
+        for gene, childeren in added.items():
+            for child in childeren:
+                child= list(map(str, child))
+                print("\t".join(child))
 
     return
 
 
 def main():
 
-    create_merged_gff(gene_file=TEST_AUGUSTUS, transcript_file=TEST_STRINGTIE)
+    # Create merged gff file
+    merged_store, new_gene_store = create_merged_gff(gene_file=TEST_AUGUSTUS, transcript_file=TEST_STRINGTIE)
 
+    # Process the output.
+    process_output(merged_store=merged_store, new_gene_store=new_gene_store)
     return
 
 

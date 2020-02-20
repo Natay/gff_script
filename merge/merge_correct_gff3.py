@@ -317,7 +317,6 @@ def modify_transcript_parent(genes):
 def modify_stringtie_transcript_count(transcripts, seen_tids):
     trans = copy.deepcopy(transcripts)
     tgname = ""
-
     #seen_trans = set()
     parent_dict = dict()
     for gene, values in trans.items():
@@ -448,7 +447,7 @@ def create_merged_gff(aug_store, transcript_store):
                 #print("CASE5")
                 annotate = "transcript_locus"
                 parent_gene = extract_attr(gene_attr,"ID=")
-                modified_transcript =  annotate_existing(gene_attr, tcount, transcript_vals, annotate,parent_gene,
+                modified_transcript = annotate_existing(gene_attr, tcount, transcript_vals, annotate,parent_gene,
                                                          seen_tids)
                 if gene_key not in seen:
                     merged_store.extend(aug_store[gene_key])
